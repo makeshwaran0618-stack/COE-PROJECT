@@ -66,3 +66,32 @@ Data Processing
 Monitoring Dashboard
     -
 Alert
+
+
+
+SHORTLY
+--------
+ Smart IV Monitoring System
+
+ The Problem We Observed
+
+IV fluid administration requires regular observation of the IV bottle
+and flow condition.
+
+During busy hospital environments, repeated manual checking can add
+to caregiver workload.
+
+This led us to ask:
+
+> "Can we create a simple system that continuously monitors the IV
+> setup and alerts the caregiver when attention is required?"
+
+ Our Design Challenge
+
+How might we reduce the need for repetitive IV monitoring while
+providing a simple and understandable alert mechanism?
+
+ Our Solution
+
+We developed a physical prototype that combines sensing,
+microcontroller-based processing and alert/monitoring functionality.
