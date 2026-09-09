@@ -71,3 +71,19 @@ FLOW CHART
                          └──────────┬──────────┘
                                     │
                                     └──────→ Repeat
+
+
+Detect Abnormal Flow
+___________________
+FlowRate = Weightprevious​−Weightcurrent​
+           ----------------------------    
+                      Time​
+
+
+Normal flow
+↓
+Low flow
+↓
+No flow / blockage
+↓
+Rapid flow
