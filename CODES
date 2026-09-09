@@ -1,0 +1,2616 @@
+CALIBRATION CODE
+------------------
+
+  #include "HX711.h"
+
+#define DOUT_PIN 4
+#define SCK_PIN 5
+
+HX711 scale;
+
+float calibration_factor = 465.5;
+
+// CHANGE THESE VALUES
+float empty_bottle_weight = 30.0;  // grams
+float full_fluid_weight = 500.0;   // grams
+
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+
+  scale.begin(DOUT_PIN, SCK_PIN);
+
+  scale.set_scale(calibration_factor);
+
+  Serial.println("Remove all weight...");
+  delay(5000);
+
+  scale.tare(50);
+
+  Serial.println("TARE COMPLETE!");
+}
+
+void loop() {
+
+  // Measure total weight
+  float total_weight = scale.get_units(20);
+
+  // Remove small noise
+  if (abs(total_weight) < 1.0) {
+    total_weight = 0;
+  }
+
+  // Calculate fluid weight
+  float fluid_weight = total_weight - empty_bottle_weight;
+
+  // Prevent negative fluid weight
+  if (fluid_weight < 0) {
+    fluid_weight = 0;
+  }
+
+  // For water-like fluid: 1 g ≈ 1 mL
+  float fluid_ml = fluid_weight;
+
+  // Calculate fluid percentage
+  float fluid_percentage =
+    (fluid_weight / full_fluid_weight) * 100.0;
+
+  // Limit percentage between 0 and 100
+  if (fluid_percentage < 0) {
+    fluid_percentage = 0;
+  }
+
+  if (fluid_percentage > 100) {
+    fluid_percentage = 100;
+  }
+
+  Serial.println("-----------------------------");
+
+
+
+  Serial.print("Fluid Volume: ");
+  Serial.print(fluid_ml, 2);
+  Serial.println(" mL");
+
+  Serial.print("Fluid Percentage: ");
+  Serial.print(fluid_percentage, 2);
+  Serial.println(" %");
+
+  delay(1000);
+}
+
+
+DASHBOARD.PHP
+  -------------------------
+  IV Monitoring System
+Real-Time Fluid Level Tracking
+Connecting… LIVE 
+PATIENT INFORMATION
+PATIENT
+Test Patient
+BED NUMBER
+Loading...
+Data streamed from the bedside ESP32 load-cell sensor via the hospital monitoring API, refreshed automatically every 2 seconds.
+CARE TEAM
+ON DUTY 
+ASSIGNED NURSE
+Test Nurse
+CONTACT NUMBER
++1 (555) 018-2739 
+Call Nurse 
+Mock contact details for hackathon demo purposes. Not sourced from the live API. "Call Nurse" places a real VoIP call via Twilio.
+FLUID MONITORING
+0%
+FLUID REMAINING
+FLUID VOLUME
+0.00 mL
+STATUS
+LOADING...
+Last Updated: Waiting... 
+
+CONFIG.PHP
+----------------
+  <?php
+
+$host = "localhost";
+$user = "root";
+$password = "";
+$database = "iv_monitoring";
+
+$conn = new mysqli(
+    $host,
+    $user,
+    $password,
+    $database
+);
+
+if ($conn->connect_error) {
+
+    die(
+        "Database connection failed: "
+        . $conn->connect_error
+    );
+
+}
+
+?>
+
+
+CALL_NURSE.PHP
+------------------
+  <?php
+/**
+ * call_nurse.php
+ * ---------------------------------------------------------------
+ * Places a real outbound VoIP phone call to the on-duty nurse
+ * using the Twilio Voice REST API, with an automated spoken
+ * alert describing the current IV status.
+ *
+ * This file is intentionally dependency-free (plain cURL) so it
+ * can drop straight into a hackathon PHP stack without Composer.
+ *
+ * SETUP (required before this will work):
+ *   1. Create a free Twilio account: https://www.twilio.com/try-twilio
+ *   2. Buy/claim a Twilio phone number (trial accounts get one free).
+ *   3. Fill in the four constants below with your own values.
+ *   4. On a Twilio TRIAL account, you can only call phone numbers
+ *      that have been verified in the Twilio console
+ *      (Console -> Phone Numbers -> Verified Caller IDs).
+ * ---------------------------------------------------------------
+ */
+
+header('Content-Type: application/json');
+
+// ======================= CONFIGURE ME =======================
+// Never expose these values in frontend/client-side code.
+const TWILIO_ACCOUNT_SID = 'ACb4d07da050b2e2132d1ec9beca295955';   // from Twilio Console
+const TWILIO_AUTH_TOKEN  = '034fda516bdd9a78f319b8ae70ecddc5';                 // from Twilio Console
+const TWILIO_FROM_NUMBER = '+19383884193';                         // your Twilio number
+const NURSE_PHONE_NUMBER = '+917305444010';                         // nurse's real phone number
+// ===============================================================
+
+// Read the alert context sent from the dashboard (optional, purely
+// used to personalize the spoken message — does not affect any
+// existing IV data logic).
+$input = json_decode(file_get_contents('php://input'), true) ?? [];
+
+$bed        = htmlspecialchars($input['bed'] ?? 'B-101', ENT_QUOTES);
+$status     = htmlspecialchars($input['status'] ?? 'UNKNOWN', ENT_QUOTES);
+$percentage = htmlspecialchars($input['percentage'] ?? '', ENT_QUOTES);
+
+// Build the spoken message read out by Twilio's text-to-speech
+$message = "Attention. This is an automated call from the I V monitoring system. "
+         . "Bed {$bed} requires attention. "
+         . "Current fluid status is {$status}. ";
+
+if ($percentage !== '') {
+    $message .= "Fluid level is at {$percentage}. ";
+}
+
+$message .= "Please respond as soon as possible.";
+
+// Twilio expects TwiML (XML) describing what the call should do
+$twiml = '<?xml version="1.0" encoding="UTF-8"?>'
+       . '<Response><Say voice="alice">' . htmlspecialchars($message, ENT_XML1) . '</Say></Response>';
+
+// Basic guard so we don't attempt a call with placeholder credentials
+if (
+    TWILIO_ACCOUNT_SID === 'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' ||
+    TWILIO_AUTH_TOKEN === 'your_auth_token_here'
+) {
+    http_response_code(500);
+    echo json_encode([
+        'success' => false,
+        'message' => 'Twilio credentials are not configured on the server yet.'
+    ]);
+    exit;
+}
+
+$url = "https://api.twilio.com/2010-04-01/Accounts/" . TWILIO_ACCOUNT_SID . "/Calls.json";
+
+$postFields = http_build_query([
+    'To'    => NURSE_PHONE_NUMBER,
+    'From'  => TWILIO_FROM_NUMBER,
+    'Twiml' => $twiml,
+]);
+
+$ch = curl_init($url);
+curl_setopt_array($ch, [
+    CURLOPT_POST            => true,
+    CURLOPT_POSTFIELDS      => $postFields,
+    CURLOPT_USERPWD         => TWILIO_ACCOUNT_SID . ':' . TWILIO_AUTH_TOKEN,
+    CURLOPT_RETURNTRANSFER  => true,
+    CURLOPT_TIMEOUT         => 15,
+]);
+
+$response  = curl_exec($ch);
+$httpCode  = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+$curlError = curl_error($ch);
+curl_close($ch);
+
+if ($curlError) {
+    http_response_code(500);
+    echo json_encode([
+        'success' => false,
+        'message' => 'Connection to Twilio failed: ' . $curlError
+    ]);
+    exit;
+}
+
+$result = json_decode($response, true);
+
+if ($httpCode >= 200 && $httpCode < 300) {
+    echo json_encode([
+        'success'  => true,
+        'message'  => 'Call placed successfully.',
+        'call_sid' => $result['sid'] ?? null,
+        'status'   => $result['status'] ?? null,
+    ]);
+} else {
+    http_response_code($httpCode ?: 500);
+    echo json_encode([
+        'success' => false,
+        'message' => $result['message'] ?? 'Twilio rejected the call request.'
+    ]);
+}
+
+
+GET_IV.DATA.PHP
+---------------
+  <?php
+
+header("Content-Type: application/json");
+
+require_once "../config.php";
+
+$sql = "SELECT * FROM iv_devices
+        WHERE device_id = 'IV-001'
+        LIMIT 1";
+
+$result = $conn->query($sql);
+
+if ($result && $result->num_rows > 0) {
+
+    $data = $result->fetch_assoc();
+
+    echo json_encode($data);
+
+} else {
+
+    echo json_encode([
+        "success" => false,
+        "message" => "No IV device data found"
+    ]);
+
+}
+
+$conn->close();
+
+?>
+
+IV_UPDATE.PHP
+  <?php
+
+header("Content-Type: application/json");
+
+require_once "../config.php";
+
+
+// Receive JSON data from ESP32
+
+$jsonData = file_get_contents(
+    "php://input"
+);
+
+$data = json_decode(
+    $jsonData,
+    true
+);
+
+
+// Check received data
+
+if (!$data) {
+
+    echo json_encode([
+
+        "success" => false,
+
+        "message" => "Invalid JSON data"
+
+    ]);
+
+    exit;
+
+}
+
+
+// Get values from ESP32
+
+$device_id = $data["device_id"];
+
+$bed_number = $data["bed_number"];
+
+$fluid_volume_ml =
+    $data["fluid_volume_ml"];
+
+$fluid_percentage =
+    $data["fluid_percentage"];
+
+
+// Determine IV status
+
+if ($fluid_percentage > 60) {
+
+    $status = "FULL";
+
+}
+
+else if ($fluid_percentage >= 20) {
+
+    $status = "MEDIUM";
+
+}
+
+else if ($fluid_percentage > 0) {
+
+    $status = "LOW";
+
+}
+
+else {
+
+    $status = "EMPTY";
+
+}
+
+
+// Update existing IV device
+
+$sql = "
+
+UPDATE iv_devices
+
+SET
+
+bed_number = ?,
+
+fluid_volume_ml = ?,
+
+fluid_percentage = ?,
+
+status = ?,
+
+last_updated = NOW()
+
+WHERE device_id = ?
+
+";
+
+
+$stmt = $conn->prepare($sql);
+
+
+$stmt->bind_param(
+
+    "sddss",
+
+    $bed_number,
+
+    $fluid_volume_ml,
+
+    $fluid_percentage,
+
+    $status,
+
+    $device_id
+
+);
+
+
+if ($stmt->execute()) {
+
+    echo json_encode([
+
+        "success" => true,
+
+        "message" =>
+        "IV data updated successfully",
+
+        "device_id" =>
+        $device_id,
+
+        "fluid_volume_ml" =>
+        $fluid_volume_ml,
+
+        "fluid_percentage" =>
+        $fluid_percentage,
+
+        "status" =>
+        $status
+
+    ]);
+
+}
+
+else {
+
+    echo json_encode([
+
+        "success" => false,
+
+        "message" =>
+        "Database update failed"
+
+    ]);
+
+}
+
+
+$stmt->close();
+
+$conn->close();
+
+?>
+
+DASHBOARD4.PHP
+  <!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>IV Monitoring Dashboard</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+
+        :root {
+            --navy-900: #0c2340;
+            --navy-800: #123457;
+            --teal-500: #0f9d92;
+            --teal-050: #e6f6f4;
+            --slate-050: #eef2f7;
+            --slate-100: #e3e9f1;
+            --slate-400: #8a97ab;
+            --slate-600: #5b6b82;
+            --slate-800: #22314a;
+            --white: #ffffff;
+
+            --full-bg: #e3f7ea;
+            --full-fg: #147a4a;
+            --medium-bg: #e5f0ff;
+            --medium-fg: #1d5ed1;
+            --low-bg: #fff3e0;
+            --low-fg: #b3610f;
+            --empty-bg: #fde8e8;
+            --empty-fg: #c0261e;
+            --idle-bg: #eef1f5;
+            --idle-fg: #4a5568;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: 'Inter', Arial, sans-serif;
+            background:
+                radial-gradient(1100px 500px at 15% -10%, #eaf5f3 0%, transparent 60%),
+                linear-gradient(180deg, var(--slate-050) 0%, #e7ecf3 100%);
+            color: var(--slate-800);
+        }
+
+        /* ---------- Header ---------- */
+
+        .topbar {
+            background: linear-gradient(120deg, var(--navy-900) 0%, var(--navy-800) 100%);
+            color: var(--white);
+            padding: 18px 28px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 14px;
+            box-shadow: 0 6px 20px rgba(12, 35, 64, 0.25);
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .brand-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .brand-text h1 {
+            margin: 0;
+            font-family: 'Manrope', sans-serif;
+            font-size: 19px;
+            font-weight: 800;
+            letter-spacing: 0.2px;
+        }
+
+        .brand-text p {
+            margin: 2px 0 0;
+            font-size: 12.5px;
+            color: #b9c6dc;
+            font-weight: 500;
+        }
+
+        .status-cluster {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .pill {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 7px 13px;
+            border-radius: 999px;
+            font-size: 12.5px;
+            font-weight: 600;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            color: #dbe4f2;
+        }
+
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #34d399;
+            box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6);
+            animation: pulse 1.6s infinite;
+        }
+
+        .pill.live {
+            background: rgba(52, 211, 153, 0.14);
+            border-color: rgba(52, 211, 153, 0.35);
+            color: #a7f3d0;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55); }
+            70% { box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+        }
+
+        /* ---------- Layout ---------- */
+
+        .wrap {
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 28px 20px 48px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 22px;
+            align-items: start;
+        }
+
+        @media (max-width: 800px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: var(--white);
+            border-radius: 18px;
+            border: 1px solid rgba(19, 46, 82, 0.06);
+            box-shadow: 0 10px 30px rgba(20, 40, 70, 0.08);
+        }
+
+        /* ---------- Patient card ---------- */
+
+        .patient-card {
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .card-label {
+            font-size: 11.5px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--slate-400);
+            margin: 0 0 14px;
+        }
+
+        .info-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .info-icon {
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            background: var(--teal-050);
+            color: var(--teal-500);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .info-text .info-title {
+            font-size: 10.5px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--slate-400);
+        }
+
+        .info-text .info-value {
+            font-size: 17px;
+            font-weight: 700;
+            color: var(--slate-800);
+            margin-top: 1px;
+        }
+
+        .divider {
+            height: 1px;
+            background: var(--slate-100);
+        }
+
+        .device-note {
+            font-size: 12px;
+            color: var(--slate-400);
+            line-height: 1.5;
+        }
+
+        /* ---------- Nurse card ---------- */
+
+        .nurse-card {
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .nurse-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 10.5px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: var(--full-fg);
+            background: var(--full-bg);
+            padding: 4px 10px;
+            border-radius: 999px;
+            margin-bottom: 14px;
+        }
+
+        .nurse-badge .dot-sm {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .phone-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--teal-500);
+            text-decoration: none;
+        }
+
+        .phone-link:hover {
+            text-decoration: underline;
+        }
+
+        /* ---------- Alarm banner ---------- */
+
+        .alarm-banner {
+            display: none;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            flex-wrap: wrap;
+            padding: 14px 18px;
+            border-radius: 14px;
+            font-weight: 700;
+            font-size: 14px;
+        }
+
+        .alarm-banner.show {
+            display: flex;
+        }
+
+        .alarm-banner.warning {
+            background: var(--low-bg);
+            color: var(--low-fg);
+        }
+
+        .alarm-banner.critical {
+            background: var(--empty-bg);
+            color: var(--empty-fg);
+            animation: alarmFlash 1s infinite;
+        }
+
+        @keyframes alarmFlash {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(192, 38, 30, 0.0); }
+            50% { box-shadow: 0 0 0 6px rgba(192, 38, 30, 0.12); }
+        }
+
+        .alarm-msg {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+        }
+
+        .ack-btn {
+            border: none;
+            background: var(--white);
+            color: var(--empty-fg);
+            font-weight: 700;
+            font-size: 12.5px;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+            padding: 9px 16px;
+            border-radius: 9px;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .ack-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.16);
+        }
+
+        .ack-btn:active {
+            transform: translateY(0);
+        }
+
+        /* ---------- Monitor card ---------- */
+
+        .monitor-card {
+            padding: 28px 26px 26px;
+            display: flex;
+            flex-direction: column;
+            gap: 22px;
+        }
+
+        .monitor-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .ring-section {
+            display: flex;
+            justify-content: center;
+            padding: 6px 0 4px;
+        }
+
+        .ring-wrap {
+            position: relative;
+            width: 220px;
+            height: 220px;
+        }
+
+        .ring-wrap svg {
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+        }
+
+        .ring-track {
+            fill: none;
+            stroke: var(--slate-100);
+            stroke-width: 16;
+        }
+
+        .ring-value {
+            fill: none;
+            stroke: var(--teal-500);
+            stroke-width: 16;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.6s ease, stroke 0.4s ease;
+        }
+
+        .ring-center {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+        }
+
+        .percentage {
+            font-family: 'Manrope', sans-serif;
+            font-size: 46px;
+            font-weight: 800;
+            color: var(--slate-800);
+            line-height: 1;
+        }
+
+        .ring-caption {
+            font-size: 11.5px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--slate-400);
+        }
+
+        .stat-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+
+        @media (max-width: 480px) {
+            .stat-row {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .stat-box {
+            background: var(--slate-050);
+            border-radius: 14px;
+            padding: 16px 18px;
+        }
+
+        .stat-box .stat-title {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--slate-400);
+            margin: 0 0 6px;
+        }
+
+        .volume {
+            font-family: 'Manrope', sans-serif;
+            font-size: 24px;
+            font-weight: 800;
+            color: var(--slate-800);
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-family: 'Manrope', sans-serif;
+            font-size: 20px;
+            font-weight: 800;
+            padding: 4px 2px;
+            border-radius: 8px;
+            transition: color 0.3s ease;
+        }
+
+        .status::before {
+            content: "";
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: currentColor;
+            flex-shrink: 0;
+        }
+
+        .footer-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 10px;
+            padding-top: 6px;
+            border-top: 1px solid var(--slate-100);
+        }
+
+        .last-updated {
+            font-size: 13px;
+            color: var(--slate-600);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .last-updated .dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--teal-500);
+            animation: pulse 1.6s infinite;
+        }
+
+        .error {
+            width: 100%;
+            text-align: center;
+            color: var(--empty-fg);
+            background: var(--empty-bg);
+            border-radius: 10px;
+            padding: 10px;
+            font-size: 13.5px;
+            font-weight: 600;
+            display: none;
+        }
+
+        .error:not(:empty) {
+            display: block;
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+    <header class="topbar">
+        <div class="brand">
+            <div class="brand-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 2c3 3.5 6 7.5 6 11a6 6 0 1 1-12 0c0-3.5 3-7.5 6-11z" stroke="#7fe6dc" stroke-width="1.8" stroke-linejoin="round"/>
+                </svg>
+            </div>
+            <div class="brand-text">
+                <h1>IV Monitoring System</h1>
+                <p>Real-Time Fluid Level Tracking</p>
+            </div>
+        </div>
+
+        <div class="status-cluster">
+            <span class="pill" id="connectionPill">
+                <span class="live-dot" id="connectionDot"></span>
+                <span id="connectionText">Connecting…</span>
+            </span>
+            <span class="pill live">
+                <span class="live-dot"></span>
+                LIVE
+            </span>
+        </div>
+    </header>
+
+    <div class="wrap">
+        <div class="grid">
+
+            <!-- Left column: Patient + Nurse -->
+            <div style="display:flex; flex-direction:column; gap:22px;">
+
+                <!-- Patient Information -->
+                <div class="card patient-card">
+                    <div>
+                        <p class="card-label">Patient Information</p>
+
+                        <div class="info-row">
+                            <div class="info-icon">
+                                <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
+                                    <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.8"/>
+                                    <path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                </svg>
+                            </div>
+                            <div class="info-text">
+                                <div class="info-title">Patient</div>
+                                <div class="info-value" id="patient">Test Patient</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <div class="info-row">
+                        <div class="info-icon">
+                            <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
+                                <path d="M3 19v-9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M3 19h18M6 12V7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                            </svg>
+                        </div>
+                        <div class="info-text">
+                            <div class="info-title">Bed Number</div>
+                            <div class="info-value" id="bed">Loading...</div>
+                        </div>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <p class="device-note">Data streamed from the bedside ESP32 load-cell sensor via the hospital monitoring API, refreshed automatically every 2 seconds.</p>
+                </div>
+
+                <!-- On-Duty Nurse (static contact card, not fetched from API) -->
+                <div class="card nurse-card">
+                    <div>
+                        <p class="card-label" style="margin-bottom:0;">Care Team</p>
+                        <span class="nurse-badge"><span class="dot-sm"></span>On Duty</span>
+
+                        <div class="info-row">
+                            <div class="info-icon">
+                                <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
+                                    <path d="M12 21s-7-4.5-9.5-9A5.5 5.5 0 0 1 12 6a5.5 5.5 0 0 1 9.5 6c-2.5 4.5-9.5 9-9.5 9z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                                </svg>
+                            </div>
+                            <div class="info-text">
+                                <div class="info-title">Assigned Nurse</div>
+                                <div class="info-value" id="nurse">Test Nurse</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <div class="info-row">
+                        <div class="info-icon">
+                            <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
+                                <path d="M6.6 10.8c1.4 2.8 3.8 5.2 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.2c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.4 0 .8-.2 1L6.6 10.8z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                            </svg>
+                        </div>
+                        <div class="info-text">
+                            <div class="info-title">Contact Number</div>
+                            <a class="phone-link info-value" id="nursePhone" href="tel:+919876543121">+91 9876543121</a>
+                        </div>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <p class="device-note">Mock contact details for hackathon demo purposes. Not sourced from the live API.</p>
+                </div>
+
+            </div>
+
+            <!-- Main Monitor -->
+            <div class="card monitor-card">
+                <div class="monitor-top">
+                    <p class="card-label" style="margin:0;">Fluid Monitoring</p>
+                </div>
+
+                <div class="ring-section">
+                    <div class="ring-wrap">
+                        <svg viewBox="0 0 220 220">
+                            <circle class="ring-track" cx="110" cy="110" r="90"></circle>
+                            <circle class="ring-value" id="ringValue" cx="110" cy="110" r="90"
+                                stroke-dasharray="565.48" stroke-dashoffset="565.48"></circle>
+                        </svg>
+                        <div class="ring-center">
+                            <div class="percentage" id="percentage">0%</div>
+                            <div class="ring-caption">Fluid Remaining</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="stat-row">
+                    <div class="stat-box">
+                        <p class="stat-title">Fluid Volume</p>
+                        <div class="volume" id="volume">0.00 mL</div>
+                    </div>
+                    <div class="stat-box">
+                        <p class="stat-title">Status</p>
+                        <div class="status" id="status">LOADING...</div>
+                    </div>
+                </div>
+
+                <div class="alarm-banner" id="alarmBanner">
+                    <div class="alarm-msg">
+                        <span id="alarmIcon">⚠️</span>
+                        <span id="alarmText">Fluid level low</span>
+                    </div>
+                    <button class="ack-btn" id="ackBtn">Acknowledged</button>
+                </div>
+
+                <div class="footer-row">
+                    <div class="last-updated">
+                        <span class="dot"></span>
+                        <span>Last Updated: <span id="lastUpdated">Waiting...</span></span>
+                    </div>
+                </div>
+
+                <div class="error" id="error"></div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+
+        // Circumference of the progress ring (r = 90)
+        const RING_CIRCUMFERENCE = 2 * Math.PI * 90;
+
+        /* =========================================================
+           Alarm / Buzzer System
+           - Warning zone  : 10% < percentage <= 20%  -> single buzz
+           - Critical zone : 0%  < percentage < 10%   -> continuous beep
+           - percentage === 0 (or missing/empty)      -> no buzzer at all
+           - "Acknowledged" button silences the sound for the
+             current critical episode; a fresh drop back into the
+             critical zone after recovering will alarm again.
+           ========================================================= */
+
+        let audioCtx = null;
+        let beepIntervalId = null;
+        let currentAlarmLevel = "none";   // "none" | "warning" | "critical"
+        let warningPlayedForThisEpisode = false;
+        let criticalAcknowledged = false;
+
+        function getAudioContext() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === "suspended") {
+                audioCtx.resume();
+            }
+            return audioCtx;
+        }
+
+        // Unlock audio on first user interaction (browser autoplay policy)
+        function unlockAudioOnce() {
+            getAudioContext();
+            document.removeEventListener("click", unlockAudioOnce);
+            document.removeEventListener("keydown", unlockAudioOnce);
+        }
+        document.addEventListener("click", unlockAudioOnce);
+        document.addEventListener("keydown", unlockAudioOnce);
+
+        function playTone(durationMs, frequency) {
+            try {
+                const ctx = getAudioContext();
+                const oscillator = ctx.createOscillator();
+                const gain = ctx.createGain();
+
+                oscillator.type = "square";
+                oscillator.frequency.value = frequency || 880;
+
+                gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + durationMs / 1000);
+
+                oscillator.connect(gain);
+                gain.connect(ctx.destination);
+
+                oscillator.start();
+                oscillator.stop(ctx.currentTime + durationMs / 1000 + 0.02);
+            } catch (e) {
+                console.warn("Unable to play alarm tone:", e);
+            }
+        }
+
+        function playSingleBuzz() {
+            playTone(350, 660);
+        }
+
+        function startContinuousBeep() {
+            if (beepIntervalId) return;
+            playTone(300, 950);
+            beepIntervalId = setInterval(() => playTone(300, 950), 700);
+        }
+
+        function stopContinuousBeep() {
+            if (beepIntervalId) {
+                clearInterval(beepIntervalId);
+                beepIntervalId = null;
+            }
+        }
+
+        function showAlarmBanner(level) {
+            const banner = document.getElementById("alarmBanner");
+            const icon = document.getElementById("alarmIcon");
+            const text = document.getElementById("alarmText");
+            const ackBtn = document.getElementById("ackBtn");
+
+            banner.classList.remove("warning", "critical");
+
+            if (level === "warning") {
+                banner.classList.add("show", "warning");
+                icon.innerText = "🔔";
+                text.innerText = "Fluid level at 20% — please check the IV bag soon.";
+                ackBtn.style.display = "none";
+            } else if (level === "critical") {
+                banner.classList.add("show", "critical");
+                icon.innerText = "🚨";
+                text.innerText = criticalAcknowledged
+                    ? "Critical: fluid below 10% — alarm acknowledged."
+                    : "Critical: fluid below 10% — immediate attention required!";
+                ackBtn.style.display = "inline-block";
+            } else {
+                banner.classList.remove("show");
+            }
+        }
+
+        function updateAlarm(percentage) {
+
+            // Buzzer must never trigger at exactly 0% (empty / no reading)
+            if (!percentage || percentage <= 0) {
+                stopContinuousBeep();
+                showAlarmBanner("none");
+                currentAlarmLevel = "none";
+                warningPlayedForThisEpisode = false;
+                criticalAcknowledged = false;
+                return;
+            }
+
+            if (percentage < 10) {
+
+                // Entering critical zone fresh (e.g. came from warning/normal)
+                if (currentAlarmLevel !== "critical") {
+                    criticalAcknowledged = false;
+                }
+
+                currentAlarmLevel = "critical";
+                showAlarmBanner("critical");
+
+                if (!criticalAcknowledged) {
+                    startContinuousBeep();
+                } else {
+                    stopContinuousBeep();
+                }
+
+            } else if (percentage <= 20) {
+
+                stopContinuousBeep();
+                currentAlarmLevel = "warning";
+                showAlarmBanner("warning");
+
+                if (!warningPlayedForThisEpisode) {
+                    playSingleBuzz();
+                    warningPlayedForThisEpisode = true;
+                }
+
+            } else {
+
+                // Back above 20% — reset everything for the next episode
+                stopContinuousBeep();
+                showAlarmBanner("none");
+                currentAlarmLevel = "none";
+                warningPlayedForThisEpisode = false;
+                criticalAcknowledged = false;
+            }
+        }
+
+        document.getElementById("ackBtn").addEventListener("click", function () {
+            criticalAcknowledged = true;
+            stopContinuousBeep();
+            if (currentAlarmLevel === "critical") {
+                showAlarmBanner("critical");
+            }
+        });
+
+        function setConnectionState(connected) {
+
+            const pill = document.getElementById("connectionPill");
+            const text = document.getElementById("connectionText");
+
+            if (connected) {
+                pill.classList.add("live");
+                text.innerText = "Connected";
+            } else {
+                pill.classList.remove("live");
+                text.innerText = "Disconnected";
+            }
+        }
+
+        function updateRing(percentage, color) {
+
+            const ring = document.getElementById("ringValue");
+
+            let clamped = Math.max(0, Math.min(100, percentage));
+            let offset = RING_CIRCUMFERENCE - (clamped / 100) * RING_CIRCUMFERENCE;
+
+            ring.style.strokeDashoffset = offset;
+            ring.style.stroke = color;
+        }
+
+        function loadIVData() {
+
+            fetch("api/get_iv_data.php")
+
+                .then(response => {
+
+                    if (!response.ok) {
+                        throw new Error("Network response was not OK");
+                    }
+
+                    return response.json();
+
+                })
+
+                .then(data => {
+
+                    console.log("Received data:", data);
+
+                    /*
+                     * If your PHP API returns:
+                     *
+                     * {
+                     *   "success": true,
+                     *   "data": {
+                     *      "bed_number": "B-101",
+                     *      "fluid_volume_ml": 163.4,
+                     *      "fluid_percentage": 32.68,
+                     *      "status": "MEDIUM",
+                     *      "last_updated": "2026-07-22 20:06:02"
+                     *   }
+                     * }
+                     *
+                     * then use data.data.
+                     */
+
+                    let ivData = data.data ? data.data : data;
+
+
+                    // Bed Number
+                    document.getElementById("bed").innerText =
+                        ivData.bed_number || "B-101";
+
+
+                    // Fluid Percentage
+                    let percentage =
+                        parseFloat(ivData.fluid_percentage) || 0;
+
+                    document.getElementById("percentage").innerText =
+                        percentage.toFixed(1) + "%";
+
+
+                    // Fluid Volume
+                    let volume =
+                        parseFloat(ivData.fluid_volume_ml) || 0;
+
+                    document.getElementById("volume").innerText =
+                        volume.toFixed(1) + " mL";
+
+
+                    // Status
+                    let status =
+                        ivData.status || "EMPTY";
+
+                    status = status.toUpperCase();
+
+                    let statusElement =
+                        document.getElementById("status");
+
+                    statusElement.innerText = status;
+
+
+                    // Change status box color + ring color to match
+                    let ringColor = "#0f9d92";
+
+                    if (status === "FULL") {
+
+                        statusElement.style.color = "var(--full-fg)";
+                        ringColor = getComputedStyle(document.documentElement).getPropertyValue('--full-fg').trim();
+
+                    }
+
+                    else if (status === "MEDIUM") {
+
+                        statusElement.style.color = "var(--medium-fg)";
+                        ringColor = getComputedStyle(document.documentElement).getPropertyValue('--medium-fg').trim();
+
+                    }
+
+                    else if (status === "LOW") {
+
+                        statusElement.style.color = "var(--low-fg)";
+                        ringColor = getComputedStyle(document.documentElement).getPropertyValue('--low-fg').trim();
+
+                    }
+
+                    else if (status === "EMPTY") {
+
+                        statusElement.style.color = "var(--empty-fg)";
+                        ringColor = getComputedStyle(document.documentElement).getPropertyValue('--empty-fg').trim();
+
+                    }
+
+                    else {
+
+                        statusElement.style.color = "var(--idle-fg)";
+                        ringColor = getComputedStyle(document.documentElement).getPropertyValue('--idle-fg').trim();
+
+                    }
+
+                    updateRing(percentage, ringColor);
+
+
+                    // Buzzer / alarm logic based on live fluid percentage
+                    updateAlarm(percentage);
+
+
+                    // Last Updated
+                    document.getElementById("lastUpdated").innerText =
+                        (ivData.last_updated || "Unknown");
+
+
+                    // Remove error message
+                    document.getElementById("error").innerText = "";
+
+                    setConnectionState(true);
+
+                })
+
+                .catch(error => {
+
+                    console.error("Error loading IV data:", error);
+
+                    document.getElementById("error").innerText =
+                        "Unable to connect to server";
+
+                    setConnectionState(false);
+                    stopContinuousBeep();
+
+                });
+
+        }
+
+
+        // Load data immediately when the page opens
+        loadIVData();
+
+
+        // Automatically refresh data every 2 seconds
+        setInterval(loadIVData, 500);
+
+    </script>
+
+</body>
+
+</html>
+
+
+DASHBOARD2.PHP
+      <!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>IV Monitoring Dashboard</title>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+
+        :root {
+            --navy-900: #0c2340;
+            --navy-800: #123457;
+            --teal-500: #0f9d92;
+            --teal-050: #e6f6f4;
+            --slate-050: #eef2f7;
+            --slate-100: #e3e9f1;
+            --slate-400: #8a97ab;
+            --slate-600: #5b6b82;
+            --slate-800: #22314a;
+            --white: #ffffff;
+
+            --full-bg: #e3f7ea;
+            --full-fg: #147a4a;
+            --medium-bg: #e5f0ff;
+            --medium-fg: #1d5ed1;
+            --low-bg: #fff3e0;
+            --low-fg: #b3610f;
+            --empty-bg: #fde8e8;
+            --empty-fg: #c0261e;
+            --idle-bg: #eef1f5;
+            --idle-fg: #4a5568;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            min-height: 100vh;
+            font-family: 'Inter', Arial, sans-serif;
+            background:
+                radial-gradient(1100px 500px at 15% -10%, #eaf5f3 0%, transparent 60%),
+                linear-gradient(180deg, var(--slate-050) 0%, #e7ecf3 100%);
+            color: var(--slate-800);
+        }
+
+        /* ---------- Header ---------- */
+
+        .topbar {
+            background: linear-gradient(120deg, var(--navy-900) 0%, var(--navy-800) 100%);
+            color: var(--white);
+            padding: 18px 28px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 14px;
+            box-shadow: 0 6px 20px rgba(12, 35, 64, 0.25);
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .brand-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .brand-text h1 {
+            margin: 0;
+            font-family: 'Manrope', sans-serif;
+            font-size: 19px;
+            font-weight: 800;
+            letter-spacing: 0.2px;
+        }
+
+        .brand-text p {
+            margin: 2px 0 0;
+            font-size: 12.5px;
+            color: #b9c6dc;
+            font-weight: 500;
+        }
+
+        .status-cluster {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .pill {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 7px 13px;
+            border-radius: 999px;
+            font-size: 12.5px;
+            font-weight: 600;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            color: #dbe4f2;
+        }
+
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #34d399;
+            box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6);
+            animation: pulse 1.6s infinite;
+        }
+
+        .pill.live {
+            background: rgba(52, 211, 153, 0.14);
+            border-color: rgba(52, 211, 153, 0.35);
+            color: #a7f3d0;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55); }
+            70% { box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+        }
+
+        /* ---------- Layout ---------- */
+
+        .wrap {
+            max-width: 980px;
+            margin: 0 auto;
+            padding: 28px 20px 48px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 22px;
+            align-items: start;
+        }
+
+        @media (max-width: 800px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .card {
+            background: var(--white);
+            border-radius: 18px;
+            border: 1px solid rgba(19, 46, 82, 0.06);
+            box-shadow: 0 10px 30px rgba(20, 40, 70, 0.08);
+        }
+
+        /* ---------- Patient card ---------- */
+
+        .patient-card {
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .card-label {
+            font-size: 11.5px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--slate-400);
+            margin: 0 0 14px;
+        }
+
+        .info-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .info-icon {
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            background: var(--teal-050);
+            color: var(--teal-500);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+
+        .info-text .info-title {
+            font-size: 10.5px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--slate-400);
+        }
+
+        .info-text .info-value {
+            font-size: 17px;
+            font-weight: 700;
+            color: var(--slate-800);
+            margin-top: 1px;
+        }
+
+        .divider {
+            height: 1px;
+            background: var(--slate-100);
+        }
+
+        .device-note {
+            font-size: 12px;
+            color: var(--slate-400);
+            line-height: 1.5;
+        }
+
+        /* ---------- Nurse card ---------- */
+
+        .nurse-card {
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .nurse-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 10.5px;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: var(--full-fg);
+            background: var(--full-bg);
+            padding: 4px 10px;
+            border-radius: 999px;
+            margin-bottom: 14px;
+        }
+
+        .nurse-badge .dot-sm {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .phone-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--teal-500);
+            text-decoration: none;
+        }
+
+        .phone-link:hover {
+            text-decoration: underline;
+        }
+
+        .call-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 9px;
+            width: 100%;
+            border: none;
+            background: var(--teal-500);
+            color: var(--white);
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            font-weight: 700;
+            padding: 12px 16px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: background 0.15s ease, transform 0.15s ease;
+        }
+
+        .call-btn:hover {
+            background: #0c8078;
+            transform: translateY(-1px);
+        }
+
+        .call-btn:active {
+            transform: translateY(0);
+        }
+
+        .call-btn:disabled {
+            background: var(--slate-400);
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .call-btn.calling {
+            background: var(--low-fg);
+        }
+
+        .call-status {
+            font-size: 12.5px;
+            font-weight: 600;
+            text-align: center;
+            min-height: 16px;
+        }
+
+        .call-status.success {
+            color: var(--full-fg);
+        }
+
+        .call-status.error {
+            color: var(--empty-fg);
+        }
+
+        .spinner {
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255,255,255,0.4);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+            display: none;
+        }
+
+        .call-btn.calling .spinner {
+            display: inline-block;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* ---------- Alarm banner ---------- */
+
+        .alarm-banner {
+            display: none;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            flex-wrap: wrap;
+            padding: 14px 18px;
+            border-radius: 14px;
+            font-weight: 700;
+            font-size: 14px;
+        }
+
+        .alarm-banner.show {
+            display: flex;
+        }
+
+        .alarm-banner.warning {
+            background: var(--low-bg);
+            color: var(--low-fg);
+        }
+
+        .alarm-banner.critical {
+            background: var(--empty-bg);
+            color: var(--empty-fg);
+            animation: alarmFlash 1s infinite;
+        }
+
+        @keyframes alarmFlash {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(192, 38, 30, 0.0); }
+            50% { box-shadow: 0 0 0 6px rgba(192, 38, 30, 0.12); }
+        }
+
+        .alarm-msg {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+        }
+
+        .ack-btn {
+            border: none;
+            background: var(--white);
+            color: var(--empty-fg);
+            font-weight: 700;
+            font-size: 12.5px;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+            padding: 9px 16px;
+            border-radius: 9px;
+            cursor: pointer;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+        }
+
+        .ack-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.16);
+        }
+
+        .ack-btn:active {
+            transform: translateY(0);
+        }
+
+        /* ---------- Monitor card ---------- */
+
+        .monitor-card {
+            padding: 28px 26px 26px;
+            display: flex;
+            flex-direction: column;
+            gap: 22px;
+        }
+
+        .monitor-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .ring-section {
+            display: flex;
+            justify-content: center;
+            padding: 6px 0 4px;
+        }
+
+        .ring-wrap {
+            position: relative;
+            width: 220px;
+            height: 220px;
+        }
+
+        .ring-wrap svg {
+            width: 100%;
+            height: 100%;
+            transform: rotate(-90deg);
+        }
+
+        .ring-track {
+            fill: none;
+            stroke: var(--slate-100);
+            stroke-width: 16;
+        }
+
+        .ring-value {
+            fill: none;
+            stroke: var(--teal-500);
+            stroke-width: 16;
+            stroke-linecap: round;
+            transition: stroke-dashoffset 0.6s ease, stroke 0.4s ease;
+        }
+
+        .ring-center {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+        }
+
+        .percentage {
+            font-family: 'Manrope', sans-serif;
+            font-size: 46px;
+            font-weight: 800;
+            color: var(--slate-800);
+            line-height: 1;
+        }
+
+        .ring-caption {
+            font-size: 11.5px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: var(--slate-400);
+        }
+
+        .stat-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+
+        @media (max-width: 480px) {
+            .stat-row {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .stat-box {
+            background: var(--slate-050);
+            border-radius: 14px;
+            padding: 16px 18px;
+        }
+
+        .stat-box .stat-title {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--slate-400);
+            margin: 0 0 6px;
+        }
+
+        .volume {
+            font-family: 'Manrope', sans-serif;
+            font-size: 24px;
+            font-weight: 800;
+            color: var(--slate-800);
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-family: 'Manrope', sans-serif;
+            font-size: 20px;
+            font-weight: 800;
+            padding: 4px 2px;
+            border-radius: 8px;
+            transition: color 0.3s ease;
+        }
+
+        .status::before {
+            content: "";
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: currentColor;
+            flex-shrink: 0;
+        }
+
+        .footer-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 10px;
+            padding-top: 6px;
+            border-top: 1px solid var(--slate-100);
+        }
+
+        .last-updated {
+            font-size: 13px;
+            color: var(--slate-600);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .last-updated .dot {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--teal-500);
+            animation: pulse 1.6s infinite;
+        }
+
+        .error {
+            width: 100%;
+            text-align: center;
+            color: var(--empty-fg);
+            background: var(--empty-bg);
+            border-radius: 10px;
+            padding: 10px;
+            font-size: 13.5px;
+            font-weight: 600;
+            display: none;
+        }
+
+        .error:not(:empty) {
+            display: block;
+        }
+
+    </style>
+
+</head>
+
+<body>
+
+    <header class="topbar">
+        <div class="brand">
+            <div class="brand-icon">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 2c3 3.5 6 7.5 6 11a6 6 0 1 1-12 0c0-3.5 3-7.5 6-11z" stroke="#7fe6dc" stroke-width="1.8" stroke-linejoin="round"/>
+                </svg>
+            </div>
+            <div class="brand-text">
+                <h1>IV Monitoring System</h1>
+                <p>Real-Time Fluid Level Tracking</p>
+            </div>
+        </div>
+
+        <div class="status-cluster">
+            <span class="pill" id="connectionPill">
+                <span class="live-dot" id="connectionDot"></span>
+                <span id="connectionText">Connecting…</span>
+            </span>
+            <span class="pill live">
+                <span class="live-dot"></span>
+                LIVE
+            </span>
+        </div>
+    </header>
+
+    <div class="wrap">
+        <div class="grid">
+
+            <!-- Left column: Patient + Nurse -->
+            <div style="display:flex; flex-direction:column; gap:22px;">
+
+                <!-- Patient Information -->
+                <div class="card patient-card">
+                    <div>
+                        <p class="card-label">Patient Information</p>
+
+                        <div class="info-row">
+                            <div class="info-icon">
+                                <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
+                                    <circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="1.8"/>
+                                    <path d="M4 20c0-4.4 3.6-7 8-7s8 2.6 8 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                                </svg>
+                            </div>
+                            <div class="info-text">
+                                <div class="info-title">Patient</div>
+                                <div class="info-value" id="patient">Test Patient</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <div class="info-row">
+                        <div class="info-icon">
+                            <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
+                                <path d="M3 19v-9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                                <path d="M3 19h18M6 12V7a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                            </svg>
+                        </div>
+                        <div class="info-text">
+                            <div class="info-title">Bed Number</div>
+                            <div class="info-value" id="bed">Loading...</div>
+                        </div>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <p class="device-note">Data streamed from the bedside ESP32 load-cell sensor via the hospital monitoring API, refreshed automatically every 2 seconds.</p>
+                </div>
+
+                <!-- On-Duty Nurse (static contact card, not fetched from API) -->
+                <div class="card nurse-card">
+                    <div>
+                        <p class="card-label" style="margin-bottom:0;">Care Team</p>
+                        <span class="nurse-badge"><span class="dot-sm"></span>On Duty</span>
+
+                        <div class="info-row">
+                            <div class="info-icon">
+                                <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
+                                    <path d="M12 21s-7-4.5-9.5-9A5.5 5.5 0 0 1 12 6a5.5 5.5 0 0 1 9.5 6c-2.5 4.5-9.5 9-9.5 9z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                                </svg>
+                            </div>
+                            <div class="info-text">
+                                <div class="info-title">Assigned Nurse</div>
+                                <div class="info-value" id="nurse">Test Nurse</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <div class="info-row">
+                        <div class="info-icon">
+                            <svg width="19" height="19" viewBox="0 0 24 24" fill="none">
+                                <path d="M6.6 10.8c1.4 2.8 3.8 5.2 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.2c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.4 0 .8-.2 1L6.6 10.8z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+                            </svg>
+                        </div>
+                        <div class="info-text">
+                            <div class="info-title">Contact Number</div>
+                            <a class="phone-link info-value" id="nursePhone" href="tel:+917305444010">+91 73054 44010</a>
+                        </div>
+                    </div>
+
+                    <div class="divider"></div>
+
+                    <button class="call-btn" id="callNurseBtn">
+                        <span class="spinner"></span>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                            <path d="M6.6 10.8c1.4 2.8 3.8 5.2 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.2c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.4 0 .8-.2 1L6.6 10.8z" fill="currentColor"/>
+                        </svg>
+                        <span id="callBtnLabel">Call Nurse</span>
+                    </button>
+
+                    <div class="call-status" id="callStatus"></div>
+
+                    <p class="device-note">Mock contact details for hackathon demo purposes. Not sourced from the live API. "Call Nurse" places a real VoIP call via Twilio.</p>
+                </div>
+
+            </div>
+
+            <!-- Main Monitor -->
+            <div class="card monitor-card">
+                <div class="monitor-top">
+                    <p class="card-label" style="margin:0;">IV Monitoring</p>
+                </div>
+
+                <div class="ring-section">
+                    <div class="ring-wrap">
+                        <svg viewBox="0 0 220 220">
+                            <circle class="ring-track" cx="110" cy="110" r="90"></circle>
+                            <circle class="ring-value" id="ringValue" cx="110" cy="110" r="90"
+                                stroke-dasharray="565.48" stroke-dashoffset="565.48"></circle>
+                        </svg>
+                        <div class="ring-center">
+                            <div class="percentage" id="percentage">0%</div>
+                            <div class="ring-caption">IV Remaining</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="stat-row">
+                    <div class="stat-box">
+                        <p class="stat-title">IV Volume</p>
+                        <div class="volume" id="volume">0.00 mL</div>
+                    </div>
+                    <div class="stat-box">
+                        <p class="stat-title">Status</p>
+                        <div class="status" id="status">LOADING...</div>
+                    </div>
+                </div>
+
+                <div class="alarm-banner" id="alarmBanner">
+                    <div class="alarm-msg">
+                        <span id="alarmIcon">⚠️</span>
+                        <span id="alarmText">Fluid level low</span>
+                    </div>
+                    <button class="ack-btn" id="ackBtn">Acknowledged</button>
+                </div>
+
+                <div class="footer-row">
+                    <div class="last-updated">
+                        <span class="dot"></span>
+                        <span>Last Updated: <span id="lastUpdated">Waiting...</span></span>
+                    </div>
+                </div>
+
+                <div class="error" id="error"></div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+
+        // Circumference of the progress ring (r = 90)
+        const RING_CIRCUMFERENCE = 2 * Math.PI * 90;
+
+        /* =========================================================
+           Alarm / Buzzer System
+           - Warning zone  : 10% < percentage <= 20%  -> single buzz
+           - Critical zone : 0%  < percentage < 10%   -> continuous beep
+           - percentage === 0 (or missing/empty)      -> no buzzer at all
+           - "Acknowledged" button silences the sound for the
+             current critical episode; a fresh drop back into the
+             critical zone after recovering will alarm again.
+           ========================================================= */
+
+        let audioCtx = null;
+        let beepIntervalId = null;
+        let currentAlarmLevel = "none";   // "none" | "warning" | "critical"
+        let warningPlayedForThisEpisode = false;
+        let criticalAcknowledged = false;
+
+        function getAudioContext() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (audioCtx.state === "suspended") {
+                audioCtx.resume();
+            }
+            return audioCtx;
+        }
+
+        // Unlock audio on first user interaction (browser autoplay policy)
+        function unlockAudioOnce() {
+            getAudioContext();
+            document.removeEventListener("click", unlockAudioOnce);
+            document.removeEventListener("keydown", unlockAudioOnce);
+        }
+        document.addEventListener("click", unlockAudioOnce);
+        document.addEventListener("keydown", unlockAudioOnce);
+
+        function playTone(durationMs, frequency) {
+            try {
+                const ctx = getAudioContext();
+                const oscillator = ctx.createOscillator();
+                const gain = ctx.createGain();
+
+                oscillator.type = "square";
+                oscillator.frequency.value = frequency || 880;
+
+                gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.35, ctx.currentTime + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + durationMs / 1000);
+
+                oscillator.connect(gain);
+                gain.connect(ctx.destination);
+
+                oscillator.start();
+                oscillator.stop(ctx.currentTime + durationMs / 1000 + 0.02);
+            } catch (e) {
+                console.warn("Unable to play alarm tone:", e);
+            }
+        }
+
+        function playSingleBuzz() {
+            playTone(350, 660);
+        }
+
+        function startContinuousBeep() {
+            if (beepIntervalId) return;
+            playTone(300, 950);
+            beepIntervalId = setInterval(() => playTone(300, 950), 700);
+        }
+
+        function stopContinuousBeep() {
+            if (beepIntervalId) {
+                clearInterval(beepIntervalId);
+                beepIntervalId = null;
+            }
+        }
+
+        function showAlarmBanner(level) {
+            const banner = document.getElementById("alarmBanner");
+            const icon = document.getElementById("alarmIcon");
+            const text = document.getElementById("alarmText");
+            const ackBtn = document.getElementById("ackBtn");
+
+            banner.classList.remove("warning", "critical");
+
+            if (level === "warning") {
+                banner.classList.add("show", "warning");
+                icon.innerText = "🔔";
+                text.innerText = "Fluid level at 20% — please check the IV bag soon.";
+                ackBtn.style.display = "none";
+            } else if (level === "critical") {
+                banner.classList.add("show", "critical");
+                icon.innerText = "🚨";
+                text.innerText = criticalAcknowledged
+                    ? "Critical: fluid below 10% — alarm acknowledged."
+                    : "Critical: fluid below 10% — immediate attention required!";
+                ackBtn.style.display = "inline-block";
+            } else {
+                banner.classList.remove("show");
+            }
+        }
+
+        function updateAlarm(percentage) {
+
+            // Buzzer must never trigger at exactly 0% (empty / no reading)
+            if (!percentage || percentage <= 0) {
+                stopContinuousBeep();
+                showAlarmBanner("none");
+                currentAlarmLevel = "none";
+                warningPlayedForThisEpisode = false;
+                criticalAcknowledged = false;
+                return;
+            }
+
+            if (percentage < 10) {
+
+                // Entering critical zone fresh (e.g. came from warning/normal)
+                if (currentAlarmLevel !== "critical") {
+                    criticalAcknowledged = false;
+                }
+
+                currentAlarmLevel = "critical";
+                showAlarmBanner("critical");
+
+                if (!criticalAcknowledged) {
+                    startContinuousBeep();
+                } else {
+                    stopContinuousBeep();
+                }
+
+            } else if (percentage <= 20) {
+
+                stopContinuousBeep();
+                currentAlarmLevel = "warning";
+                showAlarmBanner("warning");
+
+                if (!warningPlayedForThisEpisode) {
+                    playSingleBuzz();
+                    warningPlayedForThisEpisode = true;
+                }
+
+            } else {
+
+                // Back above 20% — reset everything for the next episode
+                stopContinuousBeep();
+                showAlarmBanner("none");
+                currentAlarmLevel = "none";
+                warningPlayedForThisEpisode = false;
+                criticalAcknowledged = false;
+            }
+        }
+
+        document.getElementById("ackBtn").addEventListener("click", function () {
+            criticalAcknowledged = true;
+            stopContinuousBeep();
+            if (currentAlarmLevel === "critical") {
+                showAlarmBanner("critical");
+            }
+        });
+
+        /* =========================================================
+           Call Nurse (VoIP via Twilio)
+           Hits api/call_nurse.php on the backend, which places a
+           real outbound call through the Twilio Voice API.
+           ========================================================= */
+
+        document.getElementById("callNurseBtn").addEventListener("click", function () {
+
+            const btn = document.getElementById("callNurseBtn");
+            const label = document.getElementById("callBtnLabel");
+            const statusEl = document.getElementById("callStatus");
+
+            btn.disabled = true;
+            btn.classList.add("calling");
+            label.innerText = "Calling…";
+            statusEl.innerText = "";
+            statusEl.className = "call-status";
+
+            fetch("api/call_nurse.php", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    bed: document.getElementById("bed").innerText,
+                    status: document.getElementById("status").innerText,
+                    percentage: document.getElementById("percentage").innerText
+                })
+            })
+                .then(response => response.json())
+                .then(result => {
+
+                    btn.classList.remove("calling");
+                    btn.disabled = false;
+                    label.innerText = "Call Nurse";
+
+                    if (result.success) {
+                        statusEl.innerText = "Call placed successfully.";
+                        statusEl.className = "call-status success";
+                    } else {
+                        statusEl.innerText = result.message || "Call failed. Please try again.";
+                        statusEl.className = "call-status error";
+                    }
+                })
+                .catch(error => {
+
+                    console.error("Error calling nurse:", error);
+
+                    btn.classList.remove("calling");
+                    btn.disabled = false;
+                    label.innerText = "Call Nurse";
+
+                    statusEl.innerText = "Unable to reach the call server.";
+                    statusEl.className = "call-status error";
+                });
+        });
+
+        function setConnectionState(connected) {
+
+            const pill = document.getElementById("connectionPill");
+            const text = document.getElementById("connectionText");
+
+            if (connected) {
+                pill.classList.add("live");
+                text.innerText = "Connected";
+            } else {
+                pill.classList.remove("live");
+                text.innerText = "Disconnected";
+            }
+        }
+
+        function updateRing(percentage, color) {
+
+            const ring = document.getElementById("ringValue");
+
+            let clamped = Math.max(0, Math.min(100, percentage));
+            let offset = RING_CIRCUMFERENCE - (clamped / 100) * RING_CIRCUMFERENCE;
+
+            ring.style.strokeDashoffset = offset;
+            ring.style.stroke = color;
+        }
+
+        function loadIVData() {
+
+            fetch("api/get_iv_data.php")
+
+                .then(response => {
+
+                    if (!response.ok) {
+                        throw new Error("Network response was not OK");
+                    }
+
+                    return response.json();
+
+                })
+
+                .then(data => {
+
+                    console.log("Received data:", data);
+
+                    let ivData = data.data ? data.data : data;
+
+
+                    // Bed Number
+                    document.getElementById("bed").innerText =
+                        ivData.bed_number || "B-101";
+
+
+                    // Fluid Percentage
+                    let percentage =
+                        parseFloat(ivData.fluid_percentage) || 0;
+
+                    document.getElementById("percentage").innerText =
+                        percentage.toFixed(1) + "%";
+
+
+                    // Fluid Volume
+                    let volume =
+                        parseFloat(ivData.fluid_volume_ml) || 0;
+
+                    document.getElementById("volume").innerText =
+                        volume.toFixed(1) + " mL";
+
+
+                    // Status
+                    let status =
+                        ivData.status || "EMPTY";
+
+                    status = status.toUpperCase();
+
+                    let statusElement =
+                        document.getElementById("status");
+
+                    statusElement.innerText = status;
+
+
+                    // Change status box color + ring color to match
+                    let ringColor = "#0f9d92";
+
+                    if (status === "FULL") {
+
+                        statusElement.style.color = "var(--full-fg)";
+                        ringColor = getComputedStyle(document.documentElement).getPropertyValue('--full-fg').trim();
+
+                    }
+
+                    else if (status === "MEDIUM") {
+
+                        statusElement.style.color = "var(--medium-fg)";
+                        ringColor = getComputedStyle(document.documentElement).getPropertyValue('--medium-fg').trim();
+
+                    }
+
+                    else if (status === "LOW") {
+
+                        statusElement.style.color = "var(--low-fg)";
+                        ringColor = getComputedStyle(document.documentElement).getPropertyValue('--low-fg').trim();
+
+                    }
+
+                    else if (status === "EMPTY") {
+
+                        statusElement.style.color = "var(--empty-fg)";
+                        ringColor = getComputedStyle(document.documentElement).getPropertyValue('--empty-fg').trim();
+
+                    }
+
+                    else {
+
+                        statusElement.style.color = "var(--idle-fg)";
+                        ringColor = getComputedStyle(document.documentElement).getPropertyValue('--idle-fg').trim();
+
+                    }
+
+                    updateRing(percentage, ringColor);
+
+
+                    // Buzzer / alarm logic based on live fluid percentage
+                    updateAlarm(percentage);
+
+
+                    // Last Updated
+                    document.getElementById("lastUpdated").innerText =
+                        (ivData.last_updated || "Unknown");
+
+
+                    // Remove error message
+                    document.getElementById("error").innerText = "";
+
+                    setConnectionState(true);
+
+                })
+
+                .catch(error => {
+
+                    console.error("Error loading IV data:", error);
+
+                    document.getElementById("error").innerText =
+                        "Unable to connect to server";
+
+                    setConnectionState(false);
+                    stopContinuousBeep();
+
+                });
+
+        }
+
+
+        // Load data immediately when the page opens
+        loadIVData();
+
+
+        // Automatically refresh data every 2 seconds
+        setInterval(loadIVData, 300);
+
+    </script>
+
+</body>
+
+</html>
+
+
+
