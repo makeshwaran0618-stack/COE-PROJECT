@@ -97,3 +97,32 @@ Current fluid: 240 mL
 Remaining fluid:360 mL
 Status: NORMAL
 
+
+
+
+
+IV BOTTLE
+            │
+            ▼
+       LOAD CELL
+            │
+            ▼
+          HX711
+            │
+            ▼
+          ESP32
+            │
+       Wi-Fi / HTTP
+            │
+            ▼
+       PHP BACKEND
+            │
+            ▼
+       MySQL DATABASE
+            │
+            ▼
+     MONITORING DASHBOARD
+            │
+      ┌─────┴─────┐
+      ▼           ▼
+   STATUS       ALERT
