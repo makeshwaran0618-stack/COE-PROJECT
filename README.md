@@ -56,13 +56,13 @@ an alert.
 
 
 IV Bottle
-    ↓
+    -
 Sensors
-    ↓
+    -
 Microcontroller
-    ↓
+    -
 Data Processing
-    ↓
+    -
 Monitoring Dashboard
-    ↓
+    -
 Alert
