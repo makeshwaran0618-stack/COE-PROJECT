@@ -1,0 +1,73 @@
+Hardware
+---------
+
+Microcontroller — ESP32 
+Load Cell + HX711 for measuring IV bottle weight 
+Buzzer for alert indication
+LED indicator
+OLED display
+Resistors and capacitors
+PCB
+
+
+Software
+--------
+
+Arduino IDE
+Embedded C/C++
+Web-based monitoring dashboard
+Wi-Fi communication
+XAMPP
+
+FLOW CHART
+----------
+
+
+             ┌─────────────────────┐
+             │      START          │
+             └──────────┬──────────┘
+                        ↓
+             ┌─────────────────────┐
+             │ IV Bottle Connected │
+             │   to the System     │
+             └──────────┬──────────┘
+                        ↓
+             ┌─────────────────────┐
+             │ Initialize Sensors  │
+             │ & Microcontroller   │
+             └──────────┬──────────┘
+                        ↓
+             ┌─────────────────────┐
+             │ Read IV Parameters  │
+             │  Level / Flow       │
+             └──────────┬──────────┘
+                        ↓
+                 ┌──────────────┐
+                 │ IV Condition │
+                 │   Normal?    │
+                 └──────┬───────┘
+                    YES │   │ NO
+                        │   ↓
+                        │ ┌─────────────────────┐
+                        │ │ Identify Abnormal   │
+                        │ │ Condition            │
+                        │ └──────────┬──────────┘
+                        │            ↓
+                        │ ┌─────────────────────┐
+                        │ │ Generate Alert      │
+                        │ │ Buzzer / LED /      │
+                        │ │ Dashboard           │
+                        │ └──────────┬──────────┘
+                        │            ↓
+                        └────────────┤
+                                     ↓
+                         ┌─────────────────────┐
+                         │ Update Monitoring   │
+                         │ Dashboard           │
+                         └──────────┬──────────┘
+                                    ↓
+                         ┌─────────────────────┐
+                         │ Continue Monitoring │
+                         └──────────┬──────────┘
+                                    │
+                                    └──────→ Repeat
