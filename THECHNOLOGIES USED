@@ -81,9 +81,23 @@ FlowRate = Weightprevious​−Weightcurrent​
 
 
 Normal flow
-↓
+-
 Low flow
-↓
+-
 No flow / blockage
-↓
+-
 Rapid flow
+
+Remaining-time prediction
+---------------------------
+Remaining Volume ÷ Average Flow Rate = Estimated Time
+
+
+predictive
+-----------
+Current fluid: 240 mL
+Flow rate: 2.8 mL/min
+Estimated remaining time: 85 min
+Predicted low-level time: 65 min
+Status: NORMAL
+
